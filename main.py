@@ -1,10 +1,17 @@
-from telegram.ext import Application, MessageHandler, CommandHandler, filters
-from handlers.message_handler import handle_message
-from handlers.command_handler import welcome_user, help, profile
 import os
-from dotenv import load_dotenv
-from handlers.admin_handler import stats, broadcast
 
+from dotenv import load_dotenv
+from telegram.ext import (
+    Application,
+    CallbackQueryHandler,
+    CommandHandler,
+    MessageHandler,
+    filters,
+)
+
+from handlers.admin_handler import broadcast, stats
+from handlers.command_handler import button_handler, help, menu, profile, welcome_user, summarize
+from handlers.message_handler import handle_message
 
 load_dotenv()
 
@@ -20,6 +27,10 @@ def main():
 
     app.add_handler(CommandHandler("stats", stats))
     app.add_handler(CommandHandler("broadcast", broadcast))
+    app.add_handler(CommandHandler("menu", menu))
+    app.add_handler(CommandHandler("summary", summarize))
+
+    app.add_handler(CallbackQueryHandler(button_handler))
 
     print("Bot is running...")
     app.run_polling()

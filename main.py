@@ -28,7 +28,7 @@ def main():
     app.add_handler(CommandHandler("stats", stats))
     app.add_handler(CommandHandler("broadcast", broadcast))
     app.add_handler(CommandHandler("menu", menu))
-    app.add_handler(CommandHandler("summary", summarize))
+    app.add_handler(CommandHandler("summarize", summarize))
 
     app.add_handler(CallbackQueryHandler(button_handler))
 

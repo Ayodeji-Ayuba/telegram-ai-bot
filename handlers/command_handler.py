@@ -1,5 +1,3 @@
-import os
-from google import genai
 from telegram import InlineKeyboardButton, InlineKeyboardMarkup
 import logging
 
@@ -8,6 +6,7 @@ from telegram import Update
 from telegram.ext import ContextTypes
 
 from models.models import Message, User
+from services.gemini_services import summarize_text
 from utils.database import SessionLocal
 
 logger = logging.getLogger(__name__)
@@ -46,7 +45,7 @@ async def help(update: Update, context: ContextTypes.DEFAULT_TYPE):
         "/stats - View the number of users and messages (admin only)\n"
         "/broadcast - Send a message to all users (admin only)\n"
         "/menu - Show the main menu\n"
-        "/summary - Get a summary of your messages\n"
+        "/summarize - Summarize a piece of text you send\n"
         "Just type any message to chat with the AI!"
     )
     await update.effective_message.reply_text(help_message)
@@ -79,7 +78,7 @@ async def menu(update: Update, context: ContextTypes.DEFAULT_TYPE):
     keyboard = [
         [InlineKeyboardButton("Profile", callback_data='profile')],
         [InlineKeyboardButton("Help", callback_data='help')],
-        [InlineKeyboardButton("Summary", callback_data='summary')]
+        [InlineKeyboardButton("Summarize", callback_data='summarize')]
     ]
     reply_markup = InlineKeyboardMarkup(keyboard)
     await update.effective_message.reply_text('Please choose an option:', reply_markup=reply_markup)
@@ -94,6 +93,12 @@ async def button_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
         await profile(update, context)
     elif query.data == "help":
         await help(update, context)
+    elif query.data == "summarize":
+        # a button tap carries no text to summarize, so explain how to use the command
+        await update.effective_message.reply_text(
+            "Send /summarize followed by the text you want summarized.\n"
+            "Example: /summarize Your long text here..."
+        )
 
 
 async def summarize(update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -105,10 +110,16 @@ async def summarize(update: Update, context: ContextTypes.DEFAULT_TYPE):
         )
         return
 
-    client = genai.Client(api_key=os.getenv("GEMINI_API_KEY"))
-    response = client.models.generate_content(
-        model="gemini-3.5-flash-lite",
-        contents=f"Summarize the following text concisely, keeping the main idea and important information. Do not add extra information:\n\n{text}"
-    )
-
-    await update.effective_message.reply_text(response.text)
+    try:
+        summary = await summarize_text(text)
+        if not summary:  # blocked or empty responses return None
+            await update.effective_message.reply_text(
+                "Sorry, I couldn't summarize that. Try different text?"
+            )
+            return
+        await update.effective_message.reply_text(summary)
+    except Exception:
+        logger.exception("Error in summarize")
+        await update.effective_message.reply_text(
+            "An error occurred while summarizing. Please try again."
+        )

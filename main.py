@@ -10,7 +10,14 @@ from telegram.ext import (
 )
 
 from handlers.admin_handler import broadcast, stats
-from handlers.command_handler import button_handler, help, menu, profile, welcome_user, summarize
+from handlers.command_handler import (
+    button_handler,
+    help_command,
+    menu,
+    profile,
+    summarize,
+    welcome_user,
+)
 from handlers.message_handler import handle_message
 
 load_dotenv()
@@ -20,7 +27,7 @@ def main():
     app = Application.builder().token(os.getenv("TELEGRAM_TOKEN")).build()
 
     app.add_handler(CommandHandler("start", welcome_user))
-    app.add_handler(CommandHandler("help", help))
+    app.add_handler(CommandHandler("help", help_command))
     app.add_handler(CommandHandler("profile", profile))
     app.add_handler(MessageHandler(
         filters.TEXT & ~filters.COMMAND, handle_message))

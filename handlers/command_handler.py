@@ -1,125 +1,59 @@
-from telegram import InlineKeyboardButton, InlineKeyboardMarkup
 import logging
 
-from dotenv import load_dotenv
 from telegram import Update
 from telegram.ext import ContextTypes
 
-from models.models import Message, User
-from services.gemini_services import summarize_text
+from models.models import Message
+from services.gemini_services import chat_reply
+from services.user_service import get_or_create_user
 from utils.database import SessionLocal
 
 logger = logging.getLogger(__name__)
 
+HISTORY_LIMIT = 10
 
-async def welcome_user(update: Update, context: ContextTypes.DEFAULT_TYPE):
+
+async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
     tg_user = update.effective_user
+    message_text = update.message.text
 
     db = SessionLocal()
     try:
-        # find or create the user
-        user = db.query(User).filter(User.telegram_id == tg_user.id).first()
-        if not user:
-            user = User(telegram_id=tg_user.id, username=tg_user.username)
-            db.add(user)
-            db.commit()
-            db.refresh(user)
+        user = get_or_create_user(db, tg_user)
 
-        welcome_message = (
-            f"Hello {tg_user.first_name}! Welcome to the Telegram AI Bot. "
-            "Feel free to ask me anything or have a chat!"
+        # fetch PREVIOUS history (the new message isn't saved yet)
+        # order by id instead of created_at to avoid timestamp ties
+        history = (
+            db.query(Message)
+            .filter(Message.user_id == user.id)
+            .order_by(Message.id.desc())
+            .limit(HISTORY_LIMIT)
+            .all()
         )
-        await update.effective_message.reply_text(welcome_message)
-    except Exception as e:
-        logger.error(f"Error in welcome_user: {e}")
-    finally:
-        db.close()
+        history.reverse()  # oldest -> newest
 
-
-async def help(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    help_message = (
-        "Here are some commands you can use:\n"
-        "/start - Start the bot and receive a welcome message\n"
-        "/help - Show this help message\n"
-        "/profile - View your user profile and stats\n"
-        "/stats - View the number of users and messages (admin only)\n"
-        "/broadcast - Send a message to all users (admin only)\n"
-        "/menu - Show the main menu\n"
-        "/summarize - Summarize a piece of text you send\n"
-        "Just type any message to chat with the AI!"
-    )
-    await update.effective_message.reply_text(help_message)
-
-
-async def profile(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    tg_user = update.effective_user
-
-    db = SessionLocal()
-    try:
-        user = db.query(User).filter(User.telegram_id == tg_user.id).first()
-        if user:
-            profile_message = (
-                f"User Profile:\n"
-                f"Username: {user.username}\n"
-                f"Telegram ID: {user.telegram_id}\n"
-                f"Joined At: {user.joined_at}\n"
-                f"Number of Messages: {db.query(Message).filter(Message.user_id == user.id).count()}"
-            )
-        else:
-            profile_message = "You are not registered yet. Please send a message to register."
-        await update.effective_message.reply_text(profile_message)
-    except Exception as e:
-        logger.error(f"Error in profile: {e}")
-    finally:
-        db.close()
-
-
-async def menu(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    keyboard = [
-        [InlineKeyboardButton("Profile", callback_data='profile')],
-        [InlineKeyboardButton("Help", callback_data='help')],
-        [InlineKeyboardButton("Summarize", callback_data='summarize')]
-    ]
-    reply_markup = InlineKeyboardMarkup(keyboard)
-    await update.effective_message.reply_text('Please choose an option:', reply_markup=reply_markup)
-
-
-async def button_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    query = update.callback_query
-    # tells Telegram "got it" so the button stops showing a loading spinner
-    await query.answer()
-
-    if query.data == "profile":
-        await profile(update, context)
-    elif query.data == "help":
-        await help(update, context)
-    elif query.data == "summarize":
-        # a button tap carries no text to summarize, so explain how to use the command
-        await update.effective_message.reply_text(
-            "Send /summarize followed by the text you want summarized.\n"
-            "Example: /summarize Your long text here..."
+        # the Gemini call itself lives in services/gemini_services.py
+        name = tg_user.first_name or tg_user.username
+        reply = await chat_reply(
+            [(msg.role, msg.content) for msg in history],
+            message_text,
+            name,
         )
-
-
-async def summarize(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    text = " ".join(context.args)
-
-    if not text:
-        await update.effective_message.reply_text(
-            "Please provide text to summarize.\nExample: /summarize Your long text here..."
-        )
-        return
-
-    try:
-        summary = await summarize_text(text)
-        if not summary:  # blocked or empty responses return None
-            await update.effective_message.reply_text(
-                "Sorry, I couldn't summarize that. Try different text?"
-            )
+        if not reply:  # blocked or empty responses return None
+            await update.message.reply_text("Sorry, I couldn't come up with a response. Try rephrasing?")
             return
-        await update.effective_message.reply_text(summary)
+
+        # (1) save the user message and reply together, only after Gemini succeeded
+        db.add(Message(user_id=user.id, role="user", content=message_text))
+        db.add(Message(user_id=user.id, role="assistant", content=reply))
+        db.commit()
+
+        await update.message.reply_text(reply)
+
     except Exception:
-        logger.exception("Error in summarize")
-        await update.effective_message.reply_text(
-            "An error occurred while summarizing. Please try again."
-        )
+        db.rollback()
+        logger.exception("Error handling message")
+        await update.message.reply_text("An error occurred while processing your message.")
+
+    finally:
+        db.close()
